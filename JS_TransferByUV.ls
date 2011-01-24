@@ -1,14 +1,16 @@
 /* ******************************
  * Modeler LScript: Transfer By UV
- * Version: 1.0
+ * Version: 1.1
  * Author: Johan Steen
  * Date: 28 Mar 2010
- * Modified: 28 Mar 2010
+ * Modified: 1 Apr 2010
  * Description: Transfers VMaps from the background to the background by using the UV coordinates as reference.
  *
  * http://www.artstorm.net
  *
  * Revisions
+ * Version 1.1 - 1 Apr 2010
+ * + Implemented a weight interpolation option.
  * Version 1.0 - 28 Mar 2010
  * + Initial Release.
  * ****************************** */
@@ -19,15 +21,16 @@
 @name "JS_TransferByUV"
 
 // Main Variables
-tbuv_version = "1.0";
-tbuv_date = "28 March 2010";
+tbuv_version = "1.1";
+tbuv_date = "1 April 2010";
 
 // GUI Settings
 var tolerance = 0.02;
 var VMType = 1;			// 1 = Weights, 2 = Morphs, 3 = Selections
+var interpolate = false;
 
 // GUI Gadgets
-var ctlVMList;
+var ctlVMList, ctlInterpolate;
 
 // Misc
 var fg;
@@ -149,15 +152,9 @@ getVertexMaps {
     var vmap = VMap();
     while(vmap) {
 		switch (vmap.type) {
-			case VMWEIGHT:
-				arrWeights += vmap.name;
-				break;
-			case VMMORPH:
-				arrMorphs += vmap.name;
-				break;
-			case VMSELECT:
-				arrSelections += vmap.name;
-				break;
+			case VMWEIGHT:	arrWeights += vmap.name; break;
+			case VMMORPH:	arrMorphs += vmap.name; break;
+			case VMSELECT:	arrSelections += vmap.name; break;
 		}
 		vmap = vmap.next();
     }
@@ -191,7 +188,6 @@ scanBGData
 		}
 		// If UV data was present
 		aBGPntData[ctr, 1] = <uv[1],uv[2],0>;
-		ctrt = 0;
 		for (i = 1; i <= arrSelectedVMaps.count(); i++) {
 			var vm = VMap(VMType, arrSelectedVMaps[i]);
 			if(vm.isMapped(p)) {
@@ -212,9 +208,9 @@ scanBGData
 
 
 /*
- * Function to match the UV data between the layers
+ * Functions to match the UV data between the layers
  *
- * @returns     Nothing 
+ * @returns     false for success, true for abort. 
  */
 matchUV {
 	// If selected points differs from total points, get the selection
@@ -222,39 +218,27 @@ matchUV {
 		getSelPnts();
 	}
     editbegin();
-
 	// loop through all points in foreground
     foreach(p,points){
 		// Get the UV for current point
         var uv = uvMap.getValue(p);
+		var arrGridMatches[5,2];
 		if(uv == nil) {
 			// If the point lacks UV coords
 			statsNoUV++;
 		} else {
-			// Convert the UV coords to a vector
-			var uvVec = <uv[1],uv[2],0>;
-			var bestMatch = nil;					// Keep track of current best match
-			var matchPnt = nil;				
-			// Loop through all BG UV coords
-			for (i=1; i <= iTotBGPnts; i++) {
-				// Get the distance between the FG and BG UV coord vectors
-				var getDist = vmag(uvVec - aBGPntData[i,1]);
-				// If perfect match is found
-				if (getDist == 0) {
-					// match immediately and break the for loop
-					matchPnt = i;
-					break;
-				}
-				// Check if distance is smaller than current best match, and that distance is within the tolerance
-				if (getDist < bestMatch && getDist < tolerance) {
-					bestMatch = getDist;
-					matchPnt = i;
-				}
-			}
+			// Interpolated or standard match
+			if (interpolate == true)
+				arrGridMatches = findGridMatch(uv);
+			else
+				matchPnt = findMatch(uv);
 			
 			// If a match was found, copy the VMap values
-			if (matchPnt != nil) {
-				transferVMap(p, matchPnt);
+			if (arrGridMatches[1,1] == true || matchPnt != nil) {
+				if (interpolate == true)
+					transferVMapGrid(p, arrGridMatches);
+				else
+					transferVMap(p, matchPnt);
 			} else {
 				// if no match was found, add the unmatched point to the stats array
 				statsUnMatched += p;
@@ -271,6 +255,30 @@ matchUV {
 	return false;
 }
 
+findMatch: uv {
+	// Convert the UV coords to a vector
+	var uvVec = <uv[1],uv[2],0>;
+	var bestMatch = nil;					// Keep track of current best match
+	var matchPnt = nil;				
+	// Loop through all BG UV coords
+	for (i=1; i <= iTotBGPnts; i++) {
+		// Get the distance between the FG and BG UV coord vectors
+		var getDist = vmag(uvVec - aBGPntData[i,1]);
+		// If perfect match is found
+		if (getDist == 0) {
+			// match immediately and break the for loop
+			matchPnt = i;
+			break;
+		}
+		// Check if distance is smaller than current best match, and that distance is within the tolerance
+		if (getDist < bestMatch && getDist < tolerance) {
+			bestMatch = getDist;
+			matchPnt = i;
+		}
+	}
+	return matchPnt;
+}
+
 /*
  * Functions to transfer the VMaps
  *
@@ -281,6 +289,153 @@ transferVMap: p, matchPnt {
 		if (aBGPntData[matchPnt, i + 1] != nil) {
 			var vm = VMap(VMType, arrSelectedVMaps[i] + VMNamePost, VMDim);
 			vm.setValue(p, aBGPntData[matchPnt, i + 1]);
+		}
+	}
+}
+
+/*
+ * Functions to interpolate the weight values
+ *
+ *
+ */
+findGridMatch: uv {
+	// Convert the UV coords to a vector
+	var uvVec = <uv[1],uv[2],0>;
+	var bestMatch = nil;					// Keep track of current best match
+	var matchPnt = nil;
+	var arrGridMatches = array(5, 2);		// Initializes an array to keep track of best matches in a grid [1] = pid in bgarr, [2] = dist
+	arrGridMatches[1, 1] = false;
+	arrGridMatches[1, 2] = 0;
+	// Loop through all BG UV coords
+	for (i=1; i <= iTotBGPnts; i++) {
+		// Get the distance and direction between the FG and BG UV coord vectors
+		var distance = vmag(uvVec - aBGPntData[i,1]);
+		var direction =  normalize(aBGPntData[i,1] - uvVec);
+
+		// If perfect match is found
+		if (distance == 0) {
+			// match immediately and break the for loop
+			matchPnt = i;
+			for (j = 2; j <= 5; j++) {
+				arrGridMatches[j, 1] = i;
+				arrGridMatches[j, 2] = 0;
+				arrGridMatches[1, 1] = true;
+				arrGridMatches[1, 2] = 15;
+			}
+			break;
+		}
+		/*	arrGridMatches - Multidimensional array
+			slot 1,1: Match(es) found. slot 1,2: Binary number getting flagged for each grid section matched (00001111)
+			slot 2-5,1-2: grid section, 1: point id - 2: distance
+		*/
+		// Check if distance is smaller than current best match, and that distance is within the tolerance
+		if (distance < tolerance) {
+		// BR = +-, TR = ++, BL = --, TL = -+
+			if (direction.x >= 0 && direction.y >= 0 && distance < arrGridMatches[2, 2]) {
+				arrGridMatches[1, 1] = true;
+				arrGridMatches[1, 2] = arrGridMatches[1, 2]|1;
+				arrGridMatches[2, 1] = i;
+				arrGridMatches[2, 2] = distance;
+			}
+			if (direction.x >= 0 && direction.y <= 0 && distance < arrGridMatches[3, 2]) {
+				arrGridMatches[1, 1] = true;
+				arrGridMatches[1, 2] = arrGridMatches[1, 2]|2;
+				arrGridMatches[3, 1] = i;
+				arrGridMatches[3, 2] = distance;
+			}
+			if (direction.x <= 0 && direction.y <= 0 && distance < arrGridMatches[4, 2]) {
+				arrGridMatches[1, 1] = true;
+				arrGridMatches[1, 2] = arrGridMatches[1, 2]|4;
+				arrGridMatches[4, 1] = i;
+				arrGridMatches[4, 2] = distance;
+			}
+			if (direction.x <= 0 && direction.y >= 0 && distance < arrGridMatches[5, 2]) {
+				arrGridMatches[1, 1] = true;
+				arrGridMatches[1, 2] = arrGridMatches[1, 2]|8;
+				arrGridMatches[5, 1] = i;
+				arrGridMatches[5, 2] = distance;
+			}
+		}
+	}
+	return arrGridMatches;
+}
+
+transferVMapGrid: p, arrGridMatches {
+	var arrPnts = nil;
+	var arrDistances = nil;
+	var arrFalloffs = nil;
+	var nTotalFalloff = 0;
+	
+	// Collect the point info into arrays.
+	if ((arrGridMatches[1, 2]&1) > 0) { arrPnts += arrGridMatches[2,1]; arrDistances += arrGridMatches[2,2]; }
+	if ((arrGridMatches[1, 2]&2) > 0) { arrPnts += arrGridMatches[3,1]; arrDistances += arrGridMatches[3,2]; }
+	if ((arrGridMatches[1, 2]&4) > 0) { arrPnts += arrGridMatches[4,1]; arrDistances += arrGridMatches[4,2]; }
+	if ((arrGridMatches[1, 2]&8) > 0) { arrPnts += arrGridMatches[5,1]; arrDistances += arrGridMatches[5,2]; }
+	
+	// Calculate falloff
+	for (i = 1; i <= arrPnts.count(); i++) {
+		if (arrDistances[i] != 0) {
+			var falloff = 1 / (arrDistances[i]);			// 1/x seems to give reliable falloff values when combined
+			arrFalloffs += falloff;
+			nTotalFalloff = nTotalFalloff + falloff;
+		} else {
+			arrFalloffs += 0;
+			nTotalFalloff = 0;
+		}
+	}
+
+	// Normalize the falloff
+	if (nTotalFalloff != 0) {
+		for (i = 1; i <= arrFalloffs.count(); i++) {
+			var falloff = arrFalloffs[i];
+			falloff = falloff / nTotalFalloff;
+			arrFalloffs[i] = falloff;
+		}
+	}
+	
+	// Loop through all selected weight maps
+	for (i = 1; i <= arrSelectedVMaps.count(); i++) {
+		// Loop through all BG points matched and see if they have the same value
+		var same = false;
+		var check = nil;
+		for (j = 1; j <= arrPnts.count(); j++) {
+			var pid = arrPnts[j];
+			if (aBGPntData[pid, i + 1] != nil) {
+				var weight = aBGPntData[pid, i + 1];
+				weight = weight[1];
+				if ( weight == check || check == nil) {
+					same = true;
+				} else {
+					same = false;
+					continue;
+				}
+				check = weight;
+			}
+		}
+		
+		// Calculate the new weight value
+		vmval = number(0);
+		for (j = 1; j <= arrPnts.count(); j++) {
+			pid = arrPnts[j];
+			falloff = arrFalloffs[j];
+			if (aBGPntData[pid, i + 1] != nil) {
+				var weight = (aBGPntData[pid, i + 1]);
+				var distance = arrDistances[j];
+				weight = weight[1].asNum();
+				// if all matched weight where the same, just apply them to make sure no interpolation is made in those regions.
+				if (distance == 0 || nTotalFalloff == 0 || same == true) {
+					weight = weight * (1 / arrPnts.count());
+				} else {
+					weight = weight * falloff;
+				}
+				vmval = vmval + weight;
+			}
+		}
+		
+		// And apply it
+		if (vmval != nil) {
+			var vm = VMap(VMType, arrSelectedVMaps[i] + VMNamePost, VMDim);
+			vm.setValue(p, vmval);
 		}
 	}
 }
@@ -324,7 +479,8 @@ openMainWin
 
     ctlTol = ctlnumber("Tolerance", tolerance);
     ctlVMType = ctlpopup("VMap Type", 1, @ "Weights","Morphs","Selections" @);
-	ctlVMList = ctllistbox("Vertex Maps", 204, 300, "VMListSize", "VMListItem");
+    ctlInterpolate = ctlcheckbox("Weight Interpolation", interpolate);
+	ctlVMList = ctllistbox("Vertex Maps", 204, 274, "VMListSize", "VMListItem");
     ctlAbout = ctlbutton("About the Plugin", 73, "openAboutWin");
 	
 	ctlSep1 = ctlsep();
@@ -333,8 +489,9 @@ openMainWin
 	var yComp = 0;
     ctlposition(ctlVMType,		25,	10);
     ctlposition(ctlTol,			32,	32, 204);
-	ctlposition(ctlSep1, 		0,	60);
-	ctlposition(ctlVMList,		10,	68);
+    ctlposition(ctlInterpolate,	86,	54, 150);
+	ctlposition(ctlSep1, 		0,	82);
+	ctlposition(ctlVMList,		10,	92);
 	ctlposition(ctlSep2, 		0,	376);
 	ctlposition(ctlAbout, 		86, 384, 150);
 
@@ -347,6 +504,9 @@ openMainWin
 	// Collect the input
 	tolerance = getvalue(ctlTol);
 	VMType = getvalue(ctlVMType);
+	// Set interpolate to false no matter what is set if not Weight mode
+	interpolate = (VMType == 1) ? getvalue(ctlInterpolate) : false;		
+
 	// Convert VMTYPE to LScript Constant
 	switch (VMType) {
 		case 1: VMType = VMWEIGHT; VMDim = 1; break;
@@ -367,15 +527,9 @@ openMainWin
 refreshMainWin: value
 {
 	switch (value) {
-		case 1:
-			arrListVMaps = arrWeights;
-			break;
-		case 2:
-			arrListVMaps = arrMorphs;
-			break;
-		case 3:
-			arrListVMaps = arrSelections;
-			break;
+		case 1: arrListVMaps = arrWeights; ctlInterpolate.active(true); break;
+		case 2: arrListVMaps = arrMorphs; ctlInterpolate.active(false); break;
+		case 3: arrListVMaps = arrSelections; ctlInterpolate.active(false); break;
 	}
 	// Clear listbox Selection
 	setvalue(ctlVMList, nil);

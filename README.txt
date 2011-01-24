@@ -1,4 +1,4 @@
-Transfer By UV v1.0
+Transfer By UV v1.1
 ===================
 LightWave Modeler LScript.
 
@@ -42,6 +42,8 @@ Contact me through http://www.artstorm.net/
 
 Changelog
 =========
+Version 1.1 - 1 Apr 2010:
+  * Implemented a Weight Interpolation Option.
 Version 1.0 - 29 Mar 2010:
   * Release of version 1.0, first public release.
 
