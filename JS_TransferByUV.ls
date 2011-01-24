@@ -1,12 +1,16 @@
 /* ******************************
- * Modeler LScript: Transform By UV
+ * Modeler LScript: Transfer By UV
  * Version: 1.0
  * Author: Johan Steen
  * Date: 28 Mar 2010
  * Modified: 28 Mar 2010
- * Description: Conforms the foreground mesh to the background by using the UV coordinates as reference.
+ * Description: Transfers VMaps from the background to the background by using the UV coordinates as reference.
  *
  * http://www.artstorm.net
+ *
+ * Revisions
+ * Version 1.0 - 28 Mar 2010
+ * + Initial Release.
  * ****************************** */
 
 @version 2.4
@@ -15,7 +19,7 @@
 @name "JS_TransferByUV"
 
 // Main Variables
-tbuv_version = "0.5";
+tbuv_version = "1.0";
 tbuv_date = "28 March 2010";
 
 // GUI Settings
@@ -40,14 +44,11 @@ var selPnts;			// Array that keeps track of current user point selection
 // Stats Variables
 var statsNoUV = 0;
 var statsUnMatched = nil;
-var statsOverlapped = nil;
 
-
-var arrSurfaces;
-var arrMatchedPoints;
-var arrPolys;
 
 // Vertex Maps
+var VMDim;
+var VMNamePost = nil;
 var arrWeights;
 var arrMorphs;
 var arrSelections;
@@ -55,9 +56,7 @@ var arrListVMaps;		// The array in the Listbox (copied from the others).
 var arrSelectedVMaps;	// Array that contains the VMaps selected in the listbox.
 
 
-main
-{
-    //
+main {
     // Make all preparations so the plugin finds enough data to be used.
     // --------------------------------------------------------------------------------
 	// Get selected UV Map
@@ -131,72 +130,13 @@ main
 	// If aborted during getBGInfo, exit
     if(abort) return true;
 	
-	
-	findMatches();
-
-
+	abort = matchUV();
     monend();
-
-
-
-//	abort = findMatches();
-//	if (abort)
-//		return;
 	undogroupend();
-
-			openResultWin();
-
-}
-
-
-/*
- * Function to loop through the BG points and build an array of all uv/vmap values
- *
- * @returns     Nothing 
- */
-scanBGData
-{
-	aBGPntData = nil;
-	// Setup Vertex Map type
-	if (VMType == 1)
-		var vType = VMWEIGHT;
-	if (VMType == 2)
-		var vType = VMMORPH;
-	if (VMType == 3)
-		var vType = VMSELECT;
-    editbegin();
-    var i = 1;
-    foreach(p, points)
-    {
-		// Increase the progress bar
-        if(monstep()){
-            editend(ABORT);
-            return true;
-        }
-		// Get the UV values
-        var uv = uvMap.getValue(p);
-		// Check so the point contains UV data
-		if(uv == nil){ 
-			// skip rest of the loop and continue with the next point
-			continue;
-		}
-		// If UV data was present
-		aBGPntData[i,1] = <uv[1],uv[2],0>;
-		for (j = 1; j <= arrSelectedVMaps.count(); j++) {
-			var vm = VMap(vType, arrSelectedVMaps[j]);
-			if(vm.isMapped(p)) {
-				aBGPntData[i, j + 1] = vm.getValue(p);
-				if (vm.type == VMSELECT) {
-					aBGPntData[i, j + 1] = true;
-				}
-			} else {
-				aBGPntData[i, j + 1] = nil;
-			}
-		}
-		i++;
-    }
-    editend();
-    return false;
+	// If aborted during matching, return without displaying the result window
+	if (abort)
+		return;
+	openResultWin();
 }
 
 /*
@@ -225,22 +165,65 @@ getVertexMaps {
 }
 
 
+/*
+ * Function to loop through the BG points and build an array of all uv/vmap values
+ *
+ * @returns     Nothing 
+ */
+scanBGData
+{
+	aBGPntData = nil;
+    editbegin();
+    var ctr = 1;
+    foreach(p, points)
+    {
+		// Increase the progress bar
+        if(monstep()){
+            editend(ABORT);
+            return true;
+        }
+		// Get the UV values
+        var uv = uvMap.getValue(p);
+		// Check so the point contains UV data
+		if(uv == nil){ 
+			// skip rest of the loop and continue with the next point
+			continue;
+		}
+		// If UV data was present
+		aBGPntData[ctr, 1] = <uv[1],uv[2],0>;
+		ctrt = 0;
+		for (i = 1; i <= arrSelectedVMaps.count(); i++) {
+			var vm = VMap(VMType, arrSelectedVMaps[i]);
+			if(vm.isMapped(p)) {
+				aBGPntData[ctr, i + 1] = vm.getValue(p);
+				// Special case for selection maps
+				if (vm.type == VMSELECT) {
+					aBGPntData[ctr, i + 1] = true;
+				}
+			} else {
+				aBGPntData[ctr, i + 1] = nil;
+			}
+		}
+		ctr++;
+    }
+    editend();
+    return false;
+}
 
-// Finds the matching UV coordinates and performed the desired operation
-findMatches {
-    //
-    // Start moving the points in the foreground
-    // --------------------------------------------------------------------------------
+
+/*
+ * Function to match the UV data between the layers
+ *
+ * @returns     Nothing 
+ */
+matchUV {
 	// If selected points differs from total points, get the selection
 	if (globalPntCnt != iTotFGPnts) {
 		getSelPnts();
 	}
     editbegin();
-	
 
 	// loop through all points in foreground
-    var p;
-j = 1;			
     foreach(p,points){
 		// Get the UV for current point
         var uv = uvMap.getValue(p);
@@ -254,42 +237,24 @@ j = 1;
 			var matchPnt = nil;				
 			// Loop through all BG UV coords
 			for (i=1; i <= iTotBGPnts; i++) {
-				// Skip if BG pnt already has been used
-				if (aBGPntData[i] != nil) {
-					// Get the distance between the FG and BG UV coord vectors
-					var getDist = vmag(uvVec - aBGPntData[i,1]);
-					// If perfect match is found
-					if (getDist == 0) {
-						// match immediately and break the for loop
-						matchPnt = i;
-						break;
-					}
-					// Check if distance is smaller than current best match, and that distance is within the tolerance
-					if (getDist < bestMatch && getDist < tolerance) {
-						bestMatch = getDist;
-						matchPnt = i;
-					}
+				// Get the distance between the FG and BG UV coord vectors
+				var getDist = vmag(uvVec - aBGPntData[i,1]);
+				// If perfect match is found
+				if (getDist == 0) {
+					// match immediately and break the for loop
+					matchPnt = i;
+					break;
+				}
+				// Check if distance is smaller than current best match, and that distance is within the tolerance
+				if (getDist < bestMatch && getDist < tolerance) {
+					bestMatch = getDist;
+					matchPnt = i;
 				}
 			}
 			
-			// If a match was found, move the point into position
+			// If a match was found, copy the VMap values
 			if (matchPnt != nil) {
-	if (VMType == 1)
-		copyWeight(p, matchPnt);
-	if (VMType == 2)
-		copyMorph(p, matchPnt);
-	if (VMType == 3)
-		copySelect(p, matchPnt);
-//				if (operationMode == 1) 
-//					positionPnt(p, matchPnt);
-//				if (operationMode == 2) 
-//					positionUV(p, matchPnt);
-//				if (operationMode == 3) 
-//					positionMorph(p, matchPnt);
-//		arrMatchedPoints[j,1] = p;
-//		arrMatchedPoints[j,2] = aBGPntData[matchPnt,5];
-//		j++;
-		
+				transferVMap(p, matchPnt);
 			} else {
 				// if no match was found, add the unmatched point to the stats array
 				statsUnMatched += p;
@@ -306,173 +271,19 @@ j = 1;
 	return false;
 }
 
-// Moves points, for normal mode
-copyWeight: p, matchPnt {
-		for (j = 1; j <= arrSelectedVMaps.count(); j++) {
-			if (aBGPntData[matchPnt, j + 1] != nil) {
-				var vm = VMap(VMWEIGHT, arrSelectedVMaps[j], 1);
-				vm.setValue(p, aBGPntData[matchPnt, j + 1]);
-			}
-//			var vm = VMap(VMWEIGHT, arrSelectedVMaps[j]);
-//			if(vm.isMapped(p)) {
-//				aBGPntData[i, j + 1] = vm.getValue(p);
-//			} else {
-//				aBGPntData[i, j + 1] = nil;
-//			}
+/*
+ * Functions to transfer the VMaps
+ *
+ * @returns     Nothing 
+ */
+transferVMap: p, matchPnt {
+	for (i = 1; i <= arrSelectedVMaps.count(); i++) {
+		if (aBGPntData[matchPnt, i + 1] != nil) {
+			var vm = VMap(VMType, arrSelectedVMaps[i] + VMNamePost, VMDim);
+			vm.setValue(p, aBGPntData[matchPnt, i + 1]);
 		}
-
-//	if (aBGPntData[matchPnt,5] == true) {
-//				statsOverlapped += p;
-//	}
-//	p.x = aBGPntData[matchPnt,1];
-//	p.y = aBGPntData[matchPnt,2];
-//	p.z = aBGPntData[matchPnt,3];
-//	aBGPntData[matchPnt,5] = true;
-}
-
-
-copyMorph: p, matchPnt {
-		for (j = 1; j <= arrSelectedVMaps.count(); j++) {
-			if (aBGPntData[matchPnt, j + 1] != nil) {
-				var vm = VMap(VMMORPH, arrSelectedVMaps[j], 3);
-				vm.setValue(p, aBGPntData[matchPnt, j + 1]);
-			}
-		}
-}
-
-
-copySelect: p, matchPnt {
-		for (j = 1; j <= arrSelectedVMaps.count(); j++) {
-			if (aBGPntData[matchPnt, j + 1] != nil) {
-				var vm = VMap(VMSELECT, arrSelectedVMaps[j] + "_copy", 1);
-				vm.setValue(p, aBGPntData[matchPnt, j + 1]);
-			}
-		}
-}
-
-
-// Moves UV coordinates for Cleanup mode
-positionUV: p, matchPnt {
-	if (aBGPntData[matchPnt,5] == true) {
-				statsOverlapped += p;
-	}
-	var thisUV = aBGPntData[matchPnt,4];
-	uv[1] = thisUV.x; uv[2] = thisUV.y;
-	uvMap.setValue(p,uv);
-	aBGPntData[matchPnt,5] = true;
-}
-
-// Moves positions into relative morphs
-positionMorph: p, matchPnt {
-	// Dirty, dirty solution, fix this.
-	if (morphCtr > 2) {
-		var oldMap = VMap(VMMORPH, morphPrefix + (morphCtr - 2).asStr());
-		if(oldMap.isMapped(p)) {
-			valold = oldMap.getValue(p);
-			morphMap = VMap(VMMORPH,morphPrefix + (morphCtr - 1).asStr(), 3);
-			val[1] = aBGPntData[matchPnt,1] + valold[1] - p.x;
-			val[2] = aBGPntData[matchPnt,2] + valold[2] - p.y;
-			val[3] = aBGPntData[matchPnt,3] + valold[3] - p.z;
-		} else {
-			if (morphCtr == 3) {
-				val[1] = aBGPntData[matchPnt,1] - p.x;
-				val[2] = aBGPntData[matchPnt,2] - p.y;
-				val[3] = aBGPntData[matchPnt,3] - p.z;
-			}
-		}
-	} else {
-		val[1] = aBGPntData[matchPnt,1] - p.x;
-		val[2] = aBGPntData[matchPnt,2] - p.y;
-		val[3] = aBGPntData[matchPnt,3] - p.z;
-	}
-	morphMap.setValue(p,val);
-}
-
-
-getSurfaces {
-	editbegin();
-	i = 1;
-	foreach (p, polygons) {
-		poly = polyinfo(p);
-//		info (poly[1]);
-// arrSurfaces += poly[1];
- arrSurfaces += "surf" + i.asStr();
- i++;
-//		polysurface(p, "surf" + i.asStr());
-arrPolys[i, 1] = poly[1];
-arrPolys[i, 2] = poly[2];
-arrPolys[i, 3] = poly[3];
-arrPolys[i, 4] = poly[4];
-arrPolys[i, 5] = poly[5];
-	}
-	editend();
-
-	// Get surfaces
-	// surface = nextsurface();
-	// arrSurfaces += surface;
-	// info(surface);
-	// while(true)
-	// {
-		// if((surface = nextsurface(surface)) == nil)
-		// break;
-	// arrSurfaces += surface;
-//     info(surface);
-
-	/*	surfObj = Surface();
-	while(surfObj)
-	{
-		arrSurfaces += surfObj.name;
-		surfObj = surfObj.next();
-	} */
-}
-
-
-
-
-
-
-mainSelectedMorph
-{
-	// Get selected morph
-//	vmap = VMap(VMMORPH,0) || error("Select a Weight map so I have something to do!");
-	vmap = VMap(VMMORPH,0);
-	if (!vmap) {
-		info ("no morph selected");
-	} else {
-		info (vmap.name);
 	}
 }
-
-mainGetAvailableMorphs
-{
-	// List available morphs
-    vmap = VMap(VMWEIGHT) || error("No morph maps in mesh!");
-    while(vmap && vmap.type == VMWEIGHT)
-    {
-         arrWeightMaps += vmap.name;
-         vmap = vmap.next();
-    }
-//	info (vmapnames);
-}
-
-mainAddMorphAndReturnToBase
-{
-//	info("mupp");
-	editbegin();
-	morphMap = VMap(VMMORPH,"test", 3);
-    foreach(p, points) {
-		val[1] = 0;
-		val[2] = 0;
-		val[3] = 0;
-		morphMap.setValue(p,val);
-	}
-	editend();
-	
-	new();
-	close();
-}
-
-
 
 /*
  * Functions to handle point selections
@@ -505,7 +316,7 @@ getSelPnts
  * @returns     Nothing 
  */
 
- // Main Window, Returns false for cancel
+// Main Window, Returns false for cancel
 openMainWin
 {
     reqbegin("Transfer By UV v" + tbuv_version);
@@ -513,7 +324,7 @@ openMainWin
 
     ctlTol = ctlnumber("Tolerance", tolerance);
     ctlVMType = ctlpopup("VMap Type", 1, @ "Weights","Morphs","Selections" @);
-	ctlVMList = ctllistbox("Vertex Maps", 204, 300, "ListSize", "ListItem"); //(label,width, height,count_udf,name_udf[, event_udf , [select_udf] ] )
+	ctlVMList = ctllistbox("Vertex Maps", 204, 300, "VMListSize", "VMListItem");
     ctlAbout = ctlbutton("About the Plugin", 73, "openAboutWin");
 	
 	ctlSep1 = ctlsep();
@@ -527,15 +338,21 @@ openMainWin
 	ctlposition(ctlSep2, 		0,	376);
 	ctlposition(ctlAbout, 		86, 384, 150);
 
-	
 	// Refresh controller on VMap Type Change
 	ctlrefresh(ctlVMType, "refreshMainWin");
 	
     if (!reqpost())
 		return false;
 		
+	// Collect the input
+	tolerance = getvalue(ctlTol);
 	VMType = getvalue(ctlVMType);
-    tolerance = getvalue(ctlTol);
+	// Convert VMTYPE to LScript Constant
+	switch (VMType) {
+		case 1: VMType = VMWEIGHT; VMDim = 1; break;
+		case 2: VMType = VMMORPH; VMDim = 3; break;
+		case 3: VMType = VMSELECT; VMDim = 1; VMNamePost = "_copy"; break;
+	}
 
 	// Get the names of the selected VMaps
 	var vmaps_idx = getvalue(ctlVMList);
@@ -546,6 +363,7 @@ openMainWin
 	return true;
 }
 
+// Refresh the GUI when VMap type changes
 refreshMainWin: value
 {
 	switch (value) {
@@ -559,22 +377,19 @@ refreshMainWin: value
 			arrListVMaps = arrSelections;
 			break;
 	}
-	// Clear Selection
+	// Clear listbox Selection
 	setvalue(ctlVMList, nil);
 	requpdate();
 }
 
-
-ListSize
-{
+// UDFs for the Listbox
+VMListSize {
     return(arrListVMaps.count());
 }
-
-// UDF to get a listbox item (name_udf)
-ListItem: index
-{
+VMListItem: index {
     return(arrListVMaps[index]);
 }
+
 // Result Window
 openResultWin
 {
@@ -585,13 +400,9 @@ openResultWin
     ctlposition(c2,10,10,200,13);
     c3 = ctltext("","Unmatched Points: " + statsUnMatched.size());
     ctlposition(c3,10,30,200,13);
-//    c5 = ctltext("","Overlapping Points: " + statsOverlapped.size());
-//    ctlposition(c5,10,50,200,13);
 
     c10 = ctlcheckbox("Create selection set of unmatched points", false);
     ctlposition(c10,10,76);
-    c11 = ctlcheckbox("Create selection set of overlapping points", false);
-    ctlposition(c11,10,100);
 	
     return if !reqpost();
 
@@ -601,18 +412,6 @@ openResultWin
 		editbegin();
 		selMap = VMap(VMSELECT,"UnMatched",1);
 		foreach(p,statsUnMatched)
-		{
-			selMap.setValue(p,1);
-		}
-		editend();
-	}
-
-	// Create selection set of overlapping points
-	if (getvalue(c11) == true && statsOverlapped.size() != 0) {
-		selmode(USER);
-		editbegin();
-		selMap = VMap(VMSELECT,"Overlap",1);
-		foreach(p,statsOverlapped)
 		{
 			selMap.setValue(p,1);
 		}
@@ -628,23 +427,23 @@ openAboutWin
 	reqsize(330,160);
 
 	ctlText1 = ctltext("","Transfer By UV", "Version: " + tbuv_version, "Build Date: " + tbuv_date);
-//	ctlText4 = ctltext("","Programming by Johan Steen.");
-//	ctlText5 = ctltext("","Ideas, Logo & Testing by Lee Perry-Smith.");
-//	ctlSep1 = ctlsep();
-//	ctlposition(ctlText1, 10, 10);
-//	ctlposition(ctlSep1, 0, 64);
-//	ctlposition(ctlText4, 10, 78);
-//	ctlposition(ctlText5, 10, 100);
+	ctlText4 = ctltext("","Programming by Johan Steen.");
+	ctlText5 = ctltext("","Variation of an idea by Lee Perry-Smith.");
+	ctlSep1 = ctlsep();
+	ctlposition(ctlText1, 10, 10);
+	ctlposition(ctlSep1, 0, 64);
+	ctlposition(ctlText4, 10, 78);
+	ctlposition(ctlText5, 10, 100);
 	
 	url_johan = "http://www.artstorm.net/";
 	url_lee = "http://www.ir-ltd.net/";
-	url_docs = "http://www.artstorm.net/plugins/conform-by-uv/";
-//	ctlurl1 = ctlbutton("Artstorm", 100, "gotoURL", "url_johan");
-//	ctlurl2 = ctlbutton("Infinite Realities", 100, "gotoURL", "url_lee");
-//	ctlurl3 = ctlbutton("Help", 100, "gotoURL", "url_docs");
-//	ctlposition(ctlurl1, 220, 75);
-//	ctlposition(ctlurl2, 220, 97);
-//	ctlposition(ctlurl3, 220, 10);
+	url_docs = "http://www.artstorm.net/plugins/transfer-by-uv/";
+	ctlurl1 = ctlbutton("Artstorm", 100, "gotoURL", "url_johan");
+	ctlurl2 = ctlbutton("Infinite Realities", 100, "gotoURL", "url_lee");
+	ctlurl3 = ctlbutton("Help", 100, "gotoURL", "url_docs");
+	ctlposition(ctlurl1, 220, 75);
+	ctlposition(ctlurl2, 220, 97);
+	ctlposition(ctlurl3, 220, 10);
 	
 	return if !reqpost();
 	reqend();
