@@ -1,19 +1,16 @@
-/* ******************************
- * Modeler LScript: Transfer By UV
- * Version: 1.1
- * Author: Johan Steen
- * Date: 28 Mar 2010
- * Modified: 1 Apr 2010
- * Description: Transfers VMaps from the background to the background by using the UV coordinates as reference.
- *
- * http://www.artstorm.net
- *
- * Revisions
- * Version 1.1 - 1 Apr 2010
- * + Implemented a weight interpolation option.
- * Version 1.0 - 28 Mar 2010
- * + Initial Release.
- * ****************************** */
+/*------------------------------------------------------------------------------
+ Modeler LScript: Transfer By UV
+ Version: 1.2
+ Author: Johan Steen
+ Author URI: http://www.artstorm.net/
+ Date: 27 Oct 2010
+ Description: Transfers VMaps from the background to the background by using
+              the UV coordinates as reference.
+
+ Copyright (c) 2010, Johan Steen
+ All Rights Reserved.
+ Use is subject to license terms.
+------------------------------------------------------------------------------*/
 
 @version 2.4
 @warnings
@@ -21,8 +18,9 @@
 @name "JS_TransferByUV"
 
 // Main Variables
-tbuv_version = "1.1";
-tbuv_date = "1 April 2010";
+tbuv_version = "1.2";
+tbuv_date = "27 October 2010";
+cfg_file = getdir(SETTINGSDIR) + getsep() + "JS_TransferByUV.cfg";
 
 // GUI Settings
 var tolerance = 0.02;
@@ -474,11 +472,13 @@ getSelPnts
 // Main Window, Returns false for cancel
 openMainWin
 {
+	load_config();
+
     reqbegin("Transfer By UV v" + tbuv_version);
     reqsize(248,444);               // Width, Height
 
     ctlTol = ctlnumber("Tolerance", tolerance);
-    ctlVMType = ctlpopup("VMap Type", 1, @ "Weights","Morphs","Selections" @);
+    ctlVMType = ctlpopup("VMap Type", VMType, @ "Weights","Morphs","Selections" @);
     ctlInterpolate = ctlcheckbox("Weight Interpolation", interpolate);
 	ctlVMList = ctllistbox("Vertex Maps", 204, 274, "VMListSize", "VMListItem");
     ctlAbout = ctlbutton("About the Plugin", 73, "openAboutWin");
@@ -505,7 +505,9 @@ openMainWin
 	tolerance = getvalue(ctlTol);
 	VMType = getvalue(ctlVMType);
 	// Set interpolate to false no matter what is set if not Weight mode
-	interpolate = (VMType == 1) ? getvalue(ctlInterpolate) : false;		
+	interpolate = (VMType == 1) ? getvalue(ctlInterpolate) : 0;		
+
+	save_config();
 
 	// Convert VMTYPE to LScript Constant
 	switch (VMType) {
@@ -518,6 +520,7 @@ openMainWin
 	var vmaps_idx = getvalue(ctlVMList);
 	for (i = 1; i <= vmaps_idx.count(); i++)
 		arrSelectedVMaps += arrListVMaps[vmaps_idx[i]];
+
 
     reqend();
 	return true;
@@ -592,9 +595,9 @@ openAboutWin
 	url_johan = "http://www.artstorm.net/";
 	url_lee = "http://www.ir-ltd.net/";
 	url_docs = "http://www.artstorm.net/plugins/transfer-by-uv/";
-	ctlurl1 = ctlbutton("Artstorm", 100, "gotoURL", "url_johan");
-	ctlurl2 = ctlbutton("Infinite Realities", 100, "gotoURL", "url_lee");
-	ctlurl3 = ctlbutton("Help", 100, "gotoURL", "url_docs");
+	ctlurl1 = ctlbutton("Artstorm", 100, "goto_url", "url_johan");
+	ctlurl2 = ctlbutton("Infinite Realities", 100, "goto_url", "url_lee");
+	ctlurl3 = ctlbutton("Help", 100, "goto_url", "url_docs");
 	ctlposition(ctlurl1, 220, 75);
 	ctlposition(ctlurl2, 220, 97);
 	ctlposition(ctlurl3, 220, 10);
@@ -603,11 +606,72 @@ openAboutWin
 	reqend();
 }
 
-@asyncspawn
-gotoURL: url
+
+/*
+ * Load and apply the configuration file
+ * @since		1.2
+ * @returns     Nothing
+ */
+load_config
 {
-var spawnStr = "cmd.exe /C start " + url;
-url_id = spawn(spawnStr);
-if(url_id == nil)
-	info("Failed to open website " + url);
+	// Open file
+	loader = File(cfg_file, "r");
+    // Check if file was opened
+    if(loader) {
+        // Loop util eof
+        while( !loader.eof() ) {
+			parsed_line = loader.parse("\t");
+			// Apply the settings
+			if (parsed_line[1] == "tolerance") tolerance = number(parsed_line[2]);
+			if (parsed_line[1] == "vm_type") VMType = number(parsed_line[2]);
+			if (parsed_line[1] == "interpolate") interpolate = number(parsed_line[2]);
+		}
+		
+		// Close file
+		loader.close();
+	}
+}
+
+
+/*
+ * Save the current settings to the configuration file
+ * @since		1.2
+ * @returns     Nothing
+ */
+save_config
+{
+	// Open file
+	saver = File(cfg_file, "w");
+	
+	// Check if the file was openend
+	if (saver) {
+		// Save the settings with tab separation
+		saver.writeln("tolerance", "\t", tolerance);
+		saver.writeln("vm_type", "\t", VMType);
+		saver.writeln("interpolate", "\t", interpolate);
+	
+		// Close file
+		saver.close();
+	}
+}
+
+
+/*
+ * Opens a website in the system's browser
+ * @since		1.1
+ * @modified	1.2
+ * @param		url	(string)	URL to open
+ * @returns		Nothing
+ */
+goto_url: url
+{
+	// Query the environment for the command line interpreter
+	cmd_ln = string(getenv("comspec"));
+
+	// Spawn the process
+	spawn_id = spawn(cmd_ln, " /C start ", url);
+
+	// If the spawn was unsuccessful, notify the user
+	if (spawn_id == nil)
+		info ("Failed to open website ", url);
 }
